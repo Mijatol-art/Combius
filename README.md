@@ -1,4 +1,19 @@
-COMBIUS
+<p align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&height=120&section=header&text=COMBIUS&fontSize=70&fontAlignY=35&animation=twinkling" width="100%"/>
+</p>
+
+<p align="center">
+  <b>The Ultimate OWO Discord Selfbot Engine</b><br>
+  <i>Safe · Smart · Fancy · Multi-Token</i>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8%2B-blue?style=flat&logo=python" />
+  <img src="https://img.shields.io/badge/Status-Stable-brightgreen?style=flat" />
+  <img src="https://img.shields.io/badge/Termux-Supported-orange?style=flat&logo=android" />
+  <img src="https://img.shields.io/badge/Railway-Ready-purple?style=flat&logo=railway" />
+  <img src="https://img.shields.io/badge/License-Proprietary-red?style=flat" />
+</p>
 ======
 
 The ultimate OWO Discord selfbot engine.
