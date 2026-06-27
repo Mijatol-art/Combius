@@ -53,8 +53,8 @@ Combius was built on a single principle: **maximum effectiveness through maximum
 
 ```bash
 # Clone
-git clone https://github.com/Mijatol-art/combius.git
-cd combius
+git clone https://github.com/WutDaDev/Combius.git
+cd Combius
 
 # Install
 pip install -r requirements.txt
@@ -82,15 +82,15 @@ nano .env   # Edit with your tokens
 python combius.py
 ```
 
-### Option 3: Railsway (cloud)
+### Option 3: Railway (cloud)
 1. Fork this repo to GitHub
 2. Go to railway.app → New Project → Deploy from GitHub
 3. Add all env vars from .env.example in Railway Dashboard → Variables
 4. Deploy! That's it.
 
 # 🤝 Contributing
-Combius is a proprietary tool for education ONLY!.
-If you've discovered a improvement, or improved it open a discussion.
+Combius is proprietary software for educational use only.
+If you've found an improvement or made a change, open a discussion.
 <p align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&height=100&section=footer&text=WutDaDev&fontSize=30&fontAlignY=70" />
 </p>
