@@ -9,19 +9,19 @@
 ╚══════════════════════════════════════════════════════════════╝
 
 Features:
-  🛡️ Multi-layer Anti-Detection 
-  🔄 Multi-Token / Multi-Channel
-  💎 Auto-Inventory Scanner (parses owo inv)
-  📦 Auto Lootbox (owo lb all) + Crate (owo wc all)
-  ⚡ Auto Smart Gem Equipping (best tier per type)
-  💰 Auto Sellall with smart cooldown
-  🎁 Auto Daily Claim
-  🧠 Human-like Randomized Behavior
-  🌐 Auto Browser Open (Windows/Linux/Mac/Termux)
-  🔔 Human Verification Alert + Auto Browser
-  ⏱️ Dynamic Delay Scaling
-  🛡️ Rate Limit Protection
-  📊 Live Statistics Dashboard
+   Multi-layer Anti-Detection 
+   Multi-Token / Multi-Channel
+   Auto-Inventory Scanner (parses owo inv)
+   Auto Lootbox (owo lb all) + Crate (owo wc all)
+   Auto Smart Gem Equipping (best tier per type)
+   Auto Sellall with smart cooldown
+   Auto Daily Claim
+   Human-like Randomized Behavior
+   Auto Browser Open (Windows/Linux/Mac/Termux)
+   Human Verification Alert + Auto Browser
+   Dynamic Delay Scaling
+   Rate Limit Protection
+   Live Statistics Dashboard
 
 Author: Combius Security Team
 License: Proprietary — Authorized Pentest Use Only
