@@ -38,7 +38,7 @@ import threading
 import platform
 import subprocess
 import signal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from pathlib import Path
 from collections import deque
 from typing import Optional, Dict, List, Tuple, Any
@@ -123,6 +123,8 @@ CONFIG = {
     "CAPTCHA_SERVICE": os.environ.get('CAPTCHA_SERVICE', 'manual'),
     "CAPMONSTER_API_KEY": os.environ.get('CAPMONSTER_API_KEY', ''),
     "TWOCAPTCHA_API_KEY": os.environ.get('TWOCAPTCHA_API_KEY', ''),
+    "OAH_CAPTCHA_KEYWORDS": env_list('OAH_CAPTCHA_KEYWORDS', 'enter the text,captcha image,image captcha,random text'),
+    "OAH_CAPTCHA_MODE": os.environ.get('OAH_CAPTCHA_MODE', 'manual'),
     
     # --- UI ---
     "THEME": os.environ.get('THEME', 'dark'),
@@ -134,6 +136,21 @@ CONFIG = {
     "MIN_BREAK_MINUTES": env_int('MIN_BREAK_MINUTES', 0),   # Scheduled breaks
     "BREAK_INTERVAL_MINUTES": env_int('BREAK_INTERVAL_MINUTES', 0),
     "TOKEN_ROTATION": env_bool('TOKEN_ROTATION', False),
+
+    # --- OWO Special Commands ---
+    "OAH_ENABLED": env_bool('OAH_ENABLED', True),
+    "OAH_COMMAND": os.environ.get('OAH_COMMAND', 'owo autohunt'),
+    "OAH_DURATION_SECONDS": env_int('OAH_DURATION_SECONDS', 120),
+    "OAH_REST_MINUTES": env_int('OAH_REST_MINUTES', 30),
+
+    "OWO_PIKU_ENABLED": env_bool('OWO_PIKU_ENABLED', True),
+    "OWO_RUN_ENABLED": env_bool('OWO_RUN_ENABLED', True),
+    "OWO_PIKU_DAILY_TIME": os.environ.get('OWO_PIKU_DAILY_TIME', '13:30'),
+    "OWO_RUN_DAILY_TIME": os.environ.get('OWO_RUN_DAILY_TIME', '13:30'),
+
+    "OWO_B_MIN_DELAY": env_int('OWO_B_MIN_DELAY', 0),
+    "OWO_B_MAX_DELAY": env_int('OWO_B_MAX_DELAY', 0),
+    "OWO_B_DELAY_JITTER": env_float('OWO_B_DELAY_JITTER', -1.0),
 }
 
 # Per-token gem overrides
@@ -655,8 +672,9 @@ class CaptchaHandler:
 class VerificationMonitor:
     """Monitors for human verification requests from OWO bot."""
     
-    VERIFY_KEYWORDS = ["human", "verify", "captcha", "verification", "are you human", 
+    VERIFY_KEYWORDS = ["human", "verify", "captcha", "verification", "are you human",
                        "complete this", "prove you're", "bot check"]
+    OAH_CAPTCHA_KEYWORDS = ["enter the text", "captcha image", "image captcha", "random text", "type the text"]
     
     def __init__(self, api: DiscordAPI, channels: List[str], sound: bool = True):
         self.api = api
@@ -664,6 +682,7 @@ class VerificationMonitor:
         self.sound = sound
         self.alerted_channels = set()
         self.captcha_handler = CaptchaHandler()
+        self.oah_captcha_keywords = CONFIG['OAH_CAPTCHA_KEYWORDS']
     
     def check(self, channel_id: str = None) -> bool:
         """Check if verification is requested. Returns True if verification was detected and handled."""
@@ -684,7 +703,10 @@ class VerificationMonitor:
                     continue
                 
                 # Is it asking for verification?
-                if any(kw in content for kw in self.VERIFY_KEYWORDS):
+                oah_image_flag = any(kw in content for kw in self.oah_captcha_keywords)
+                attachments = msg.get("attachments", []) or []
+                has_image_attachment = any(att.get("content_type", "").startswith("image") or att.get("url", "").lower().endswith((".png", ".jpg", ".jpeg", ".gif")) for att in attachments)
+                if any(kw in content for kw in self.VERIFY_KEYWORDS) or oah_image_flag or has_image_attachment:
                     self.alerted_channels.add(ch)
                     print()
                     print(ui.error("  ╔═══════════════════════════════════════════╗"))
@@ -709,8 +731,12 @@ class VerificationMonitor:
                     else:
                         print(ui.warning(f"  🌐 Open: {captcha_url}"))
                     
-                    print()
-                    print(ui.dim("  Complete the captcha in your browser then press Enter."))
+                    if oah_image_flag or has_image_attachment:
+                        print(ui.dim("  This looks like an OAH image text captcha. Open the link, read the text, and paste it below."))
+                    else:
+                        print(ui.dim("  Complete the captcha in your browser then press Enter."))
+                    
+                    print(ui.dim("  If the captcha is shown as an image, copy the text exactly."))
                     input(ui.primary("  Press Enter after verifying... "))
                     
                     print(ui.success("  ✅ Verification acknowledged. Resuming operations."))
@@ -810,6 +836,16 @@ class CombiusEngine:
         self.last_channel_used = None
         self.discovered_gems = []
         self.inventory_cache = None
+        self.last_command = ""
+
+        # Special command memory
+        self.oah_last_run = 0
+        self.oah_complete_at = 0
+        self.oah_rest_until = 0
+        self.oah_claimed = True
+        self.last_piku_run_date = None
+        self.last_run_run_date = None
+        self.commands_since_oah = 0
         
         # Human-like behavior state
         self.typing_speed = random.uniform(0.05, 0.15)
@@ -909,6 +945,81 @@ class CombiusEngine:
             cmd += f" {random.choice(['pls', 'now', 'go', '!', '.'])}"
         
         return cmd
+
+    def _gmt7_now(self) -> datetime:
+        return datetime.utcnow() + timedelta(hours=7)
+
+    def _parse_daily_time(self, time_str: str) -> Optional[dt_time]:
+        try:
+            hh, mm = [int(x) for x in time_str.split(':')]
+            return dt_time(hh, mm)
+        except Exception:
+            return None
+
+    def _daily_task_due(self, last_run_date: Optional[datetime.date], target_time: str) -> bool:
+        now = self._gmt7_now()
+        target = self._parse_daily_time(target_time)
+        if not target:
+            return False
+        if now.time() < target:
+            return False
+        return last_run_date != now.date()
+
+    def _record_daily_run(self, cmd: str):
+        date_today = self._gmt7_now().date()
+        if cmd == 'owo piku':
+            self.last_piku_run_date = date_today
+        elif cmd == 'owo run':
+            self.last_run_run_date = date_today
+
+    def _command_delay(self, cmd: str) -> float:
+        """Return the delay after a command, applying optional custom settings for owo b."""
+        if cmd.startswith('owo b') or cmd == 'owo b':
+            min_delay = CONFIG['OWO_B_MIN_DELAY'] or CONFIG['MIN_DELAY']
+            max_delay = CONFIG['OWO_B_MAX_DELAY'] or CONFIG['MAX_DELAY']
+            jitter = CONFIG['OWO_B_DELAY_JITTER'] if CONFIG['OWO_B_DELAY_JITTER'] >= 0 else CONFIG['DELAY_JITTER']
+            base = random.uniform(min_delay, max_delay)
+            base *= random.uniform(1 - jitter, 1 + jitter)
+            return max(5, min(300, base))
+        return self._human_delay()
+
+    def _scheduled_command(self) -> Optional[str]:
+        """Return a scheduled command if a special command is due."""
+        now = time.time()
+
+        # If OAH completed and claim is still pending, claim immediately
+        if self.oah_complete_at and now >= self.oah_complete_at and not self.oah_claimed:
+            self.oah_claimed = True
+            self.oah_rest_until = now + CONFIG['OAH_REST_MINUTES'] * 60
+            self.oah_complete_at = 0
+            print(ui.secondary(f"  [{self.username}] ⏱ OAH complete — claiming now and resting {CONFIG['OAH_REST_MINUTES']}m"))
+            return 'owo claim'
+
+        # Keep OAH resting for the configured cooldown
+        if self.oah_rest_until and now < self.oah_rest_until:
+            return None
+
+        # Run OAH when ready if enabled and not already active
+        if CONFIG['OAH_ENABLED'] and not self.oah_complete_at and self.oah_claimed:
+            self.oah_last_run = now
+            self.oah_complete_at = now + CONFIG['OAH_DURATION_SECONDS']
+            self.oah_claimed = False
+            expected = datetime.fromtimestamp(self.oah_complete_at).strftime('%H:%M:%S')
+            print(ui.secondary(f"  [{self.username}] 🤖 Running {CONFIG['OAH_COMMAND']} — will complete at {expected}"))
+            return CONFIG['OAH_COMMAND']
+
+        # Daily scheduled commands in GMT+7
+        if CONFIG['OWO_PIKU_ENABLED'] and self._daily_task_due(self.last_piku_run_date, CONFIG['OWO_PIKU_DAILY_TIME']):
+            self._record_daily_run('owo piku')
+            print(ui.secondary(f"  [{self.username}] 📅 Scheduled owo piku for GMT+7 {CONFIG['OWO_PIKU_DAILY_TIME']}"))
+            return 'owo piku'
+
+        if CONFIG['OWO_RUN_ENABLED'] and self._daily_task_due(self.last_run_run_date, CONFIG['OWO_RUN_DAILY_TIME']):
+            self._record_daily_run('owo run')
+            print(ui.secondary(f"  [{self.username}] 📅 Scheduled owo run for GMT+7 {CONFIG['OWO_RUN_DAILY_TIME']}"))
+            return 'owo run'
+
+        return None
     
     def _check_rate_limit(self) -> bool:
         """Check if we're within rate limits. Returns True if should proceed."""
@@ -1143,9 +1254,9 @@ class CombiusEngine:
                     elif (self.cycle - self.last_gem_equip_cycle) > 25:
                         self.gems_equipped_this_session = False
                 
-                # ---- Main command ----
+                # ---- Main command or scheduled task ----
                 channel = self._pick_channel()
-                cmd = self._get_owo_command()
+                cmd = self._scheduled_command() or self._get_owo_command()
                 
                 self.commands_since_sellall += 1
                 self.cycle += 1
@@ -1267,17 +1378,21 @@ def main():
     print(f"  {ui.dim('Delay:')}      {ui.primary(f'{CONFIG["MIN_DELAY"]}s - {CONFIG["MAX_DELAY"]}s')}")
     if CONFIG["DELAY_SPIKE_CHANCE"] > 0:
         print(f"  {ui.dim('Spikes:')}     {ui.dim(f'up to {CONFIG["DELAY_SPIKE_MAX"]}s ({CONFIG["DELAY_SPIKE_CHANCE"]*100:.0f}% chance)')}")
-    print(f"  {ui.dim('Sellall:')}    {ui.warning(f'every {CONFIG["SELLALL_INTERVAL"]}±{CONFIG["SELLALL_VARIANCE"]} / {CONFIG["SELLALL_COOLDOWN"]}s cd')}")
-    print(f"  {ui.dim('Gems:')}       {ui.secondary(f'{\"ON\" if CONFIG[\"GEM_ENABLED\"] else \"OFF\"}')} "
-          f"{f'(scan: {CONFIG[\"AUTO_SCAN_GEMS\"]}, IDs: {CONFIG[\"GEM_IDS\"]})' if CONFIG['GEM_ENABLED'] else ''}")
-    print(f"  {ui.dim('Lootboxes:')}  {ui.secondary(f'{\"ON\" if CONFIG[\"AUTO_OPEN_LOOTBOXES\"] else \"OFF\"}')} "
-          f"| {ui.dim('Crates:')} {ui.secondary(f'{\"ON\" if CONFIG[\"AUTO_OPEN_CRATES\"] else \"OFF\"}')}")
-    print(f"  {ui.dim('Inventory:')}  {ui.primary(f'every {CONFIG[\"INVENTORY_CHECK_INTERVAL\"]} cycles')}")
-    print(f"  {ui.dim('Browser:')}    {ui.primary(f'{\"ON\" if CONFIG[\"AUTO_BROWSER\"] else \"OFF\"}')} "
-          f"| {ui.dim('Sound:')} {ui.primary(f'{\"ON\" if CONFIG[\"VERIFY_SOUND\"] else \"OFF\"}')}")
+    print(f"  {ui.dim('Sellall:')}    {ui.warning(f'every {CONFIG['SELLALL_INTERVAL']}±{CONFIG['SELLALL_VARIANCE']} / {CONFIG['SELLALL_COOLDOWN']}s cd')}")
+    gem_status = 'ON' if CONFIG['GEM_ENABLED'] else 'OFF'
+    gem_details = f"(scan: {CONFIG['AUTO_SCAN_GEMS']}, IDs: {CONFIG['GEM_IDS']})" if CONFIG['GEM_ENABLED'] else ''
+    print(f"  {ui.dim('Gems:')}       {ui.secondary(gem_status)} {gem_details}")
+    loot_status = 'ON' if CONFIG['AUTO_OPEN_LOOTBOXES'] else 'OFF'
+    crate_status = 'ON' if CONFIG['AUTO_OPEN_CRATES'] else 'OFF'
+    print(f"  {ui.dim('Lootboxes:')}  {ui.secondary(loot_status)} | {ui.dim('Crates:')} {ui.secondary(crate_status)}")
+    print(f"  {ui.dim('Inventory:')}  {ui.primary('every ' + str(CONFIG['INVENTORY_CHECK_INTERVAL']) + ' cycles')}")
+    browser_status = 'ON' if CONFIG['AUTO_BROWSER'] else 'OFF'
+    sound_status = 'ON' if CONFIG['VERIFY_SOUND'] else 'OFF'
+    print(f"  {ui.dim('Browser:')}    {ui.primary(browser_status)} | {ui.dim('Sound:')} {ui.primary(sound_status)}")
     print(f"  {ui.dim('Captcha:')}    {ui.warning(CONFIG['CAPTCHA_SERVICE'])}")
-    print(f"  {ui.dim('Limit:')}      {ui.warning(f'{CONFIG[\"MAX_COMMANDS_PER_HOUR\"]}/hr')} "
-          f"| {ui.dim('Anti-Pattern:')} {ui.success('ON' if CONFIG['ANTI_PATTERN_ROTATION'] else 'OFF')}")
+    limit_status = str(CONFIG['MAX_COMMANDS_PER_HOUR']) + '/hr'
+    anti_pattern_status = 'ON' if CONFIG['ANTI_PATTERN_ROTATION'] else 'OFF'
+    print(f"  {ui.dim('Limit:')}      {ui.warning(limit_status)} | {ui.dim('Anti-Pattern:')} {ui.success(anti_pattern_status)}")
     
     # Per-token overrides
     if TOKEN_GEMS_OVERRIDES:
