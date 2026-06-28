@@ -996,10 +996,7 @@ class BettingTracker:
         elif outcome == 'win':
             new_bet = state['base_bet']
         else:
-            if self.betting_mode == 'capped':
-                next_bet = state['current_bet'] + state['base_bet']
-            else:
-                next_bet = state['current_bet'] * 2
+            next_bet = state['current_bet'] * 2
             if state['current_bet'] >= self.stop_loss_limit or next_bet > self.stop_loss_limit:
                 self._notify_stop_loss(game)
                 new_bet = state['base_bet']
