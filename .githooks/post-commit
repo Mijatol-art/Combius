@@ -1,0 +1,19 @@
+#!/bin/sh
+# Auto-push hook: push current branch to remote after each commit.
+# This hook is intentionally tolerant of push failures.
+
+REMOTE=${GIT_REMOTE:-origin}
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+if [ -z "$BRANCH" ]; then
+  echo "[auto-push] Could not determine current branch. Skipping push."
+  exit 0
+fi
+
+echo "[auto-push] Pushing ${BRANCH} -> ${REMOTE}/${BRANCH}"
+git push "$REMOTE" "$BRANCH" || {
+  echo "[auto-push] Push failed (network/permissions). Commit succeeded locally."
+  exit 0
+}
+
+echo "[auto-push] Push complete."
