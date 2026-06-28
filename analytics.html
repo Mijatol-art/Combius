@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Combius Betting Analytics</title>
+    <style>
+      @font-face {
+        font-family: 'SamsungSharpSans';
+        src: url('https://cdn.jsdelivr.net/gh/creativecreature/samsungsharp-sans@main/SamsungSharpSans-Medium.ttf') format('truetype');
+        font-weight: 500;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: 'SamsungSharpSans';
+        src: url('https://cdn.jsdelivr.net/gh/creativecreature/samsungsharp-sans@main/SamsungSharpSans-Bold.ttf') format('truetype');
+        font-weight: 700;
+        font-style: normal;
+      }
+      :root {
+        color-scheme: dark;
+        --bg: #07111f;
+        --panel: rgba(15, 23, 42, 0.92);
+        --panel-2: rgba(30, 41, 59, 0.95);
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+        --accent-2: #818cf8;
+        --good: #34d399;
+        --bad: #fb7185;
+        --border: rgba(255,255,255,0.08);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: 'SamsungSharpSans', 'Segoe UI', Roboto, Arial, sans-serif;
+        background: radial-gradient(circle at top left, #172554, var(--bg) 55%);
+        color: var(--text);
+        min-height: 100vh;
+        padding: 24px;
+      }
+      .shell {
+        max-width: 1200px;
+        margin: 0 auto;
+        display: grid;
+        gap: 18px;
+      }
+      .hero {
+        padding: 24px;
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        background: linear-gradient(135deg, rgba(56,189,248,0.16), rgba(129,140,248,0.13));
+        box-shadow: 0 20px 45px rgba(2,6,23,0.35);
+      }
+      .hero h1 { margin: 0 0 8px; font-size: 2rem; }
+      .hero p { margin: 0; color: var(--muted); max-width: 760px; line-height: 1.5; }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .select {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 10px 14px;
+        font-family: inherit;
+      }
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 14px;
+      }
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 18px;
+        background: var(--panel);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+      }
+      .metric { font-size: 1.7rem; font-weight: 700; margin: 6px 0; }
+      .metric.good { color: var(--good); }
+      .metric.bad { color: var(--bad); }
+      .label { color: var(--muted); font-size: 0.92rem; text-transform: uppercase; letter-spacing: 0.08em; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 12px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+      th { color: var(--muted); font-weight: 600; }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(56,189,248,0.16);
+        color: #bae6fd;
+        font-size: 0.82rem;
+        margin-right: 6px;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: #dbeafe;
+        font-size: 0.92rem;
+        line-height: 1.45;
+      }
+      @media (max-width: 700px) {
+        body { padding: 14px; }
+        .hero { padding: 18px; }
+        .hero h1 { font-size: 1.5rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <div class="toolbar">
+          <div>
+            <h1>Combius Betting Analytics</h1>
+            <p>Live session tracking for each token, with net result, live stakes, and the latest outcomes.</p>
+          </div>
+          <select id="token-select" class="select"></select>
+        </div>
+      </section>
+
+      <section class="stats-grid">
+        <div class="card">
+          <div class="label">Net Result</div>
+          <div id="net-metric" class="metric">Loading…</div>
+          <div class="pill">Cowoncy</div>
+        </div>
+        <div class="card">
+          <div class="label">OB Commands</div>
+          <div id="ob-status" class="metric">Loading…</div>
+          <div id="ob-note" class="pill">Checking status…</div>
+        </div>
+      </section>
+
+      <div class="card">
+        <h2>Current Bets</h2>
+        <table>
+          <thead>
+            <tr><th>Game</th><th>Base Bet</th><th>Current Bet</th></tr>
+          </thead>
+          <tbody id="bet-table"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Recent Outcomes</h2>
+        <pre id="results">Loading recent outcomes…</pre>
+      </div>
+    </div>
+
+    <script>
+      const tokenSelect = document.getElementById('token-select');
+
+      async function listTokenFiles() {
+        const files = new Set(['betting_analytics.json']);
+        try {
+          const response = await fetch('./');
+          const html = await response.text();
+          const matches = [...html.matchAll(/href="([^"]+)"/g)];
+          matches.forEach((match) => {
+            const href = match[1].split('?')[0];
+            if (href.startsWith('betting_analytics') && href.endsWith('.json')) {
+              files.add(href);
+            }
+          });
+        } catch (error) {
+          console.warn('Could not read directory listing:', error);
+        }
+        return [...files].sort();
+      }
+
+      async function loadData() {
+        const files = await listTokenFiles();
+        tokenSelect.innerHTML = '';
+
+        if (files.length === 0) {
+          const option = document.createElement('option');
+          option.textContent = 'No analytics files yet';
+          tokenSelect.appendChild(option);
+          document.getElementById('results').textContent = 'No analytics files are available yet.';
+          return;
+        }
+
+        files.forEach((file) => {
+          const option = document.createElement('option');
+          option.value = file;
+          const name = file === 'betting_analytics.json' ? 'Default' : file.replace('betting_analytics_', '').replace('.json', '');
+          option.textContent = name;
+          tokenSelect.appendChild(option);
+        });
+
+        const selected = tokenSelect.value || files[0];
+        if (!selected) return;
+        tokenSelect.value = selected;
+
+        const response = await fetch(`./${selected}`);
+        const data = await response.json();
+
+        const netMetric = document.getElementById('net-metric');
+        netMetric.textContent = `${data.net_profit_loss ?? 0}`;
+        netMetric.className = `metric ${Number(data.net_profit_loss || 0) >= 0 ? 'good' : 'bad'}`;
+
+        const obStatus = document.getElementById('ob-status');
+        const obNote = document.getElementById('ob-note');
+        const disabled = Boolean(data.ob_commands_disabled);
+        obStatus.textContent = disabled ? 'Disabled' : 'Enabled';
+        obStatus.className = `metric ${disabled ? 'bad' : 'good'}`;
+        obNote.textContent = disabled ? 'OB commands paused' : 'OB commands active';
+
+        const body = document.getElementById('bet-table');
+        body.innerHTML = '';
+        const games = ['cf', 'bj', 'slots'];
+        games.forEach((game) => {
+          const state = data.state[game] || {};
+          const row = document.createElement('tr');
+          row.innerHTML = `<td><strong>${game}</strong></td><td>${state.base_bet ?? '-'}</td><td>${state.current_bet ?? '-'}</td>`;
+          body.appendChild(row);
+        });
+
+        document.getElementById('results').textContent = JSON.stringify(data.results || [], null, 2);
+      }
+
+      tokenSelect.addEventListener('change', loadData);
+      loadData();
+      setInterval(loadData, 5000);
+    </script>
+  </body>
+</html>

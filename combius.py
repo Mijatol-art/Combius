@@ -79,6 +79,14 @@ def env_json(k: str, d: str = "{}") -> dict:
     except: return {}
 
 
+def build_token_analytics_path(token: str, base_dir: Optional[str] = None) -> str:
+    """Create a unique analytics file path per token."""
+    safe_token = hashlib.sha256(token.encode('utf-8')).hexdigest()[:12]
+    directory = Path(base_dir or Path(__file__).parent)
+    directory.mkdir(parents=True, exist_ok=True)
+    return str(directory / f"betting_analytics_{safe_token}.json")
+
+
 # ============================================================
 # SECTION 1: CONFIGURATION (All from .env)
 # ============================================================
@@ -163,6 +171,11 @@ CONFIG = {
     "OWO_B_MIN_DELAY": env_int('OWO_B_MIN_DELAY', 0),
     "OWO_B_MAX_DELAY": env_int('OWO_B_MAX_DELAY', 0),
     "OWO_B_DELAY_JITTER": env_float('OWO_B_DELAY_JITTER', -1.0),
+    "OWO_BET_BASE_CF": env_int('OWO_BET_BASE_CF', 10),
+    "OWO_BET_BASE_BJ": env_int('OWO_BET_BASE_BJ', 10),
+    "OWO_BET_BASE_SLOTS": env_int('OWO_BET_BASE_SLOTS', 10),
+    "OWO_BET_STOP_LOSS_LIMIT": env_int('OWO_BET_STOP_LOSS_LIMIT', 20000),
+    "OWO_TARGET_USER_ID": os.environ.get('OWO_TARGET_USER_ID', ''),
     # User ID to ping when a "⚠ are you ..." style flag appears. Set to your numeric user id.
     "ALERT_PING_USER_ID": os.environ.get('ALERT_PING_USER_ID', ''),
     # Path to log file where flagged message JSON lines will be appended
@@ -853,8 +866,171 @@ class CaptchaHandler:
 
 
 # ============================================================
-# SECTION 7: VERIFICATION CHECKER
+# SECTION 7: BETTING TRACKER & VERIFICATION CHECKER
 # ============================================================
+
+class BettingTracker:
+    """Tracks OWO gambling outcomes and applies a double-on-loss strategy per game mode."""
+
+    OFFICIAL_OWO_BOT_ID = "408785106942115850"
+
+    def __init__(self, base_bets: Optional[Dict[str, int]] = None, stop_loss_limit: int = 20000,
+                 target_user_id: Optional[str] = None, analytics_path: Optional[str] = None):
+        self.base_bets = dict(base_bets or {'cf': 10, 'bj': 10, 'slots': 10})
+        self.stop_loss_limit = stop_loss_limit
+        self.target_user_id = target_user_id or ''
+        self.analytics_path = analytics_path or str(Path(__file__).with_name('betting_analytics.json'))
+        self.state = {
+            game: {'base_bet': int(self.base_bets.get(game, 10)), 'current_bet': int(self.base_bets.get(game, 10))}
+            for game in ('cf', 'bj', 'slots')
+        }
+        self.net_profit_loss = 0
+        self.results = []
+        self.ob_commands_disabled = False
+        self.last_summary = None
+        self._persist_analytics()
+
+    def _message_text(self, msg: dict) -> str:
+        parts = []
+        content = msg.get('content') or ''
+        if isinstance(content, str) and content.strip():
+            parts.append(content)
+        for embed in msg.get('embeds', []) or []:
+            if isinstance(embed, dict):
+                for key in ('title', 'description', 'url'):
+                    value = embed.get(key)
+                    if value:
+                        parts.append(str(value))
+                fields = embed.get('fields', []) or []
+                for field in fields:
+                    if isinstance(field, dict):
+                        for value in (field.get('name'), field.get('value')):
+                            if value:
+                                parts.append(str(value))
+        return ' '.join(parts)
+
+    def _parse_amount(self, text: str) -> Optional[int]:
+        patterns = [
+            r'(?:won|lost|earned|received|gained|spent|bet|reward)\s+(\d+)',
+            r'you\s+(?:won|lost)\s+(\d+)',
+            r'(\d+)(?:\s*cowoncy)?',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.I)
+            if match:
+                return int(match.group(1))
+        return None
+
+    def _determine_outcome(self, text: str, game: str) -> Optional[str]:
+        lowered = text.lower()
+        if game == 'cf':
+            if re.search(r'\byou lost\b|\blost\b', lowered):
+                return 'loss'
+            if re.search(r'\band won\b|\byou won\b|\bwon\b', lowered):
+                return 'win'
+            return None
+        if game == 'bj':
+            if re.search(r'\b(tie|push)\b', lowered):
+                return 'tie'
+            if re.search(r'\b(bust|lost|lose|lose[d]?)\b', lowered):
+                return 'loss'
+            if re.search(r'\bwon\b', lowered):
+                return 'win'
+            return None
+        if game == 'slots':
+            if re.search(r'\blost\b', lowered):
+                return 'loss'
+            if re.search(r'\bwon\b|\bx\d+(?:\.\d+)?\b', lowered):
+                return 'win'
+            return None
+        return None
+
+    def _game_mode_from_text(self, text: str) -> Optional[str]:
+        lowered = text.lower()
+        if re.search(r'\bcoinflip\b|\bflip\b', lowered):
+            return 'cf'
+        if re.search(r'\bblackjack\b|\bjack\b', lowered):
+            return 'bj'
+        if re.search(r'\bslots\b', lowered):
+            return 'slots'
+        return None
+
+    def _apply_strategy(self, game: str, outcome: str, amount: Optional[int]) -> dict:
+        state = self.state[game]
+        if outcome == 'tie':
+            new_bet = state['current_bet']
+        elif outcome == 'win':
+            new_bet = state['base_bet']
+        else:
+            next_bet = state['current_bet'] * 2
+            if next_bet > self.stop_loss_limit:
+                print(ui.warning(f"  ⚠️ Stop-loss triggered! Bet exceeded {self.stop_loss_limit}. Resetting back to base bet."))
+                new_bet = state['base_bet']
+            else:
+                new_bet = next_bet
+        state['current_bet'] = new_bet
+        return {'game': game, 'outcome': outcome, 'amount': amount, 'current_bet': new_bet}
+
+    def _persist_analytics(self):
+        payload = {
+            'generated_at': datetime.utcnow().isoformat() + 'Z',
+            'net_profit_loss': self.net_profit_loss,
+            'state': self.state,
+            'results': self.results[-10:],
+            'ob_commands_disabled': self.ob_commands_disabled,
+        }
+        try:
+            Path(self.analytics_path).write_text(json.dumps(payload, indent=2), encoding='utf-8')
+        except Exception:
+            pass
+
+    def _print_summary(self):
+        self.last_summary = {'net_profit_loss': self.net_profit_loss, 'state': self.state}
+        print(ui.secondary("  📊 OWO Betting Summary"))
+        print(ui.dim(f"    Net: {self.net_profit_loss} cowoncy"))
+        for game in ('cf', 'bj', 'slots'):
+            state = self.state[game]
+            print(ui.dim(f"    {game}: base={state['base_bet']} current={state['current_bet']}"))
+        self._persist_analytics()
+
+    def handle_message(self, msg: dict) -> Optional[dict]:
+        author = msg.get('author', {}) or {}
+        author_id = str(author.get('id') or author.get('user_id') or '')
+        if author_id not in {self.OFFICIAL_OWO_BOT_ID, str(self.OFFICIAL_OWO_BOT_ID)}:
+            return None
+
+        text = self._message_text(msg)
+        if not text:
+            return None
+
+        if re.search(r'you do not have an active', text, re.I):
+            self.ob_commands_disabled = True
+            print(ui.warning("  ⚠️ Token disabled for ob commands only due to inactive status."))
+            self._persist_analytics()
+            return {'event': 'ob_disabled'}
+
+        game = self._game_mode_from_text(text)
+        if not game:
+            return None
+
+        outcome = self._determine_outcome(text, game)
+        if not outcome:
+            return None
+
+        amount = self._parse_amount(text)
+        if outcome == 'win' and amount is not None:
+            self.net_profit_loss += amount
+        elif outcome == 'loss' and amount is not None:
+            self.net_profit_loss -= amount
+        elif outcome == 'tie':
+            amount = 0
+
+        result = self._apply_strategy(game, outcome, amount)
+        result['net_profit_loss'] = self.net_profit_loss
+        self.results.append(result)
+        self._print_summary()
+        return result
+
 
 class VerificationMonitor:
     """Monitors for human verification requests from OWO bot."""
@@ -1122,6 +1298,16 @@ class CombiusEngine:
         self.inventory_cache = None
         self.last_command = ""
         self.last_sent_command = ""
+        self.betting_tracker = BettingTracker(
+            base_bets={
+                'cf': CONFIG['OWO_BET_BASE_CF'],
+                'bj': CONFIG['OWO_BET_BASE_BJ'],
+                'slots': CONFIG['OWO_BET_BASE_SLOTS'],
+            },
+            stop_loss_limit=CONFIG['OWO_BET_STOP_LOSS_LIMIT'],
+            target_user_id=CONFIG.get('OWO_TARGET_USER_ID') or self.user_id,
+            analytics_path=build_token_analytics_path(self.token),
+        )
         # Per-command memory: record the cycle when a command last ran
         self.command_last_cycle: Dict[str, int] = {}
 
@@ -1227,6 +1413,19 @@ class CombiusEngine:
         self.consecutive_same_channel += 1
         return ch
     
+    def _monitor_owo_messages(self, channel: Optional[str] = None):
+        """Inspect recent channel messages for OWO bot game results and inactive-status warnings."""
+        channel = channel or self.last_channel_used or self._pick_channel()
+        try:
+            msgs = self.api.fetch_messages(channel, limit=12)
+        except Exception:
+            return
+        for msg in msgs:
+            try:
+                self.betting_tracker.handle_message(msg)
+            except Exception:
+                pass
+
     def _get_owo_command(self) -> str:
         """Generate exactly one command per turn without repeating the previous one."""
         # Build weighted pool and respect per-command cooldown memory
@@ -1239,6 +1438,8 @@ class CombiusEngine:
         # Strong bias for 'oh' and 'ob'
         oh_list = CMD_POOL.get("oh", [])
         ob_list = CMD_POOL.get("ob", [])
+        if self.betting_tracker and self.betting_tracker.ob_commands_disabled:
+            ob_list = []
         for _ in range(12):
             pool += oh_list + ob_list
 
@@ -1705,6 +1906,7 @@ class CombiusEngine:
                 # Send command
                 success = self.api.send_message(channel, cmd)
                 if success:
+                    self._monitor_owo_messages(channel)
                     self.stats.record_command()
                     print(ui.tag(self.username, 
                         f"{ui.dim(local_time())} #{self.commands_since_sellall} "
@@ -1715,6 +1917,7 @@ class CombiusEngine:
                 
                 # ---- Verification check ----
                 self.verify_monitor.check(channel)
+                self._monitor_owo_messages(channel)
                 
                 # ---- Sellall check (with variance) ----
                 sellall_target = CONFIG["SELLALL_INTERVAL"] + random.randint(
