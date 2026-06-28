@@ -1114,6 +1114,7 @@ class CombiusEngine:
         self.discovered_gems = []
         self.inventory_cache = None
         self.last_command = ""
+        self.last_sent_command = ""
 
         # Special command memory
         self.oah_last_run = 0
@@ -1207,9 +1208,15 @@ class CombiusEngine:
         return ch
     
     def _get_owo_command(self) -> str:
-        """Generate a command from the restricted pool: gambling, hunt, or owo b."""
+        """Generate exactly one command per turn without repeating the previous one."""
         pool = CMD_POOL["gambling"] + CMD_POOL["hunt"] + CMD_POOL["b"]
-        return random.choice(pool)
+        if self.last_sent_command:
+            pool = [c for c in pool if c != self.last_sent_command]
+        if not pool:
+            pool = CMD_POOL["gambling"] + CMD_POOL["hunt"] + CMD_POOL["b"]
+        cmd = random.choice(pool)
+        self.last_sent_command = cmd
+        return cmd
 
     def _gmt7_now(self) -> datetime:
         return datetime.utcnow() + timedelta(hours=7)
