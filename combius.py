@@ -1626,9 +1626,11 @@ def main():
     print(ui.header("  CONFIGURATION"))
     print(f"  {ui.dim('Tokens:')}     {ui.bold(str(len(CONFIG['DISCORD_TOKENS'])))}")
     print(f"  {ui.dim('Channels:')}   {ui.bold(str(len(CONFIG['CHANNEL_IDS'])))}")
-    print(f"  {ui.dim('Delay:')}      {ui.primary(f'{CONFIG["MIN_DELAY"]}s - {CONFIG["MAX_DELAY"]}s')}")
+    delay_text = f"{CONFIG['MIN_DELAY']}s - {CONFIG['MAX_DELAY']}s"
+    print(f"  {ui.dim('Delay:')}      {ui.primary(delay_text)}")
     if CONFIG["DELAY_SPIKE_CHANCE"] > 0:
-        print(f"  {ui.dim('Spikes:')}     {ui.dim(f'up to {CONFIG["DELAY_SPIKE_MAX"]}s ({CONFIG["DELAY_SPIKE_CHANCE"]*100:.0f}% chance)')}")
+        spikes_text = f"up to {CONFIG['DELAY_SPIKE_MAX']}s ({CONFIG['DELAY_SPIKE_CHANCE']*100:.0f}% chance)"
+        print(f"  {ui.dim('Spikes:')}     {ui.dim(spikes_text)}")
     sellall_text = f"every {CONFIG['SELLALL_INTERVAL']}±{CONFIG['SELLALL_VARIANCE']} / {CONFIG['SELLALL_COOLDOWN']}s cd"
     print(f"  {ui.dim('Sellall:')}    {ui.warning(sellall_text)}")
     gem_status = 'ON' if CONFIG['GEM_ENABLED'] else 'OFF'
