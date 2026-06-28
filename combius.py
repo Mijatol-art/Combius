@@ -89,6 +89,7 @@ CONFIG = {
     # --- Timing (Human-like randomization) ---
     "MIN_DELAY": env_int('MIN_DELAY', 20),
     "MAX_DELAY": env_int('MAX_DELAY', 40),
+    "COMMAND_DELAY_SECONDS": env_int('COMMAND_DELAY_SECONDS', 10),
     "DELAY_JITTER": env_float('DELAY_JITTER', 0.3),       # 30% jitter
     "DELAY_SPIKE_CHANCE": env_float('DELAY_SPIKE_CHANCE', 0.05),  # 5% chance of long pause
     "DELAY_SPIKE_MAX": env_int('DELAY_SPIKE_MAX', 120),   # Max spike pause (2 min)
@@ -213,12 +214,11 @@ GEM_TIER_LEVEL = {**{i: i-50 for i in range(51, 58)},   # 51->1, 57->7
                   **{i: i-64 for i in range(65, 72)},    # 65->1, 71->7
                   **{i: i-71 for i in range(72, 79)}}    # 72->1, 78->7
 
-# OWO Command pool for human-like variety
+# OWO Command pool for the requested behavior: gambling + hunt + owo b only.
 CMD_POOL = {
-    "core": ["owo"] * 5 + ["owo hunt"] * 4 + ["owo battle"] * 3,
-    "actions": ["owo dig", "owo fish", "owo pray", "owo b", "owo bg"],
-    "social": ["owo profile", "owo cookies", "owo cowoncy"],
-    "rare": ["owo slots 10", "owo coinflip head 10", "owo coinflip tail 10"],
+    "gambling": ["owo slots 10", "owo coinflip head 10", "owo coinflip tail 10"],
+    "hunt": ["owo hunt"],
+    "b": ["owo b"],
 }
 
 # Safety channel check intervals (seconds)
@@ -538,23 +538,43 @@ class InventoryParser:
     
     @staticmethod
     def get_best_gems(inv_data: dict, min_tier: int = 3) -> List[int]:
-        """Get the best gem of each type (hunting, empowering, lucky) from inventory."""
+        """Get the best gem of each type (hunting, empowering, lucky) from inventory.
+
+        This uses inventory quantities and avoids selecting gems with zero quantities.
+        Only one gem per gem type is selected per equip action.
+        """
+        gem_quantities = inv_data.get("gem_quantities", {}) or {}
         gems = inv_data.get("gem_ids", [])
-        hunting = sorted([g for g in gems if g in HUNTING_GEMS], reverse=True)
-        empowering = sorted([g for g in gems if g in EMPOWERING_GEMS], reverse=True)
-        lucky = sorted([g for g in gems if g in LUCKY_GEMS], reverse=True)
-        
+
+        def _valid_candidates(group_ids: List[int]) -> List[int]:
+            candidates = []
+            for gem_id in sorted(set(group_ids), reverse=True):
+                quantity = gem_quantities.get(gem_id, 0)
+                if quantity <= 0:
+                    continue
+                if GEM_TIER_LEVEL.get(gem_id, 0) >= min_tier:
+                    candidates.append(gem_id)
+            return candidates
+
+        hunting = _valid_candidates([g for g in gems if g in HUNTING_GEMS])
+        empowering = _valid_candidates([g for g in gems if g in EMPOWERING_GEMS])
+        lucky = _valid_candidates([g for g in gems if g in LUCKY_GEMS])
+
         best = []
         for gem_list in [hunting, empowering, lucky]:
-            for gem_id in gem_list:
-                if GEM_TIER_LEVEL.get(gem_id, 0) >= min_tier:
-                    best.append(gem_id)
-                    break
-        
-        # Fallback: if none found, take any gems
+            if gem_list:
+                best.append(gem_list[0])
+
+        # Fallback: if none found, take any visible gems with quantity > 0
         if not best and gems:
-            best = sorted(gems, key=lambda g: GEM_TIER_LEVEL.get(g, 0), reverse=True)[:3]
-        
+            fallback = []
+            for gem_id in sorted(set(gems), reverse=True):
+                if gem_quantities.get(gem_id, 0) <= 0:
+                    continue
+                fallback.append(gem_id)
+            if fallback:
+                best = fallback[:3]
+
         return best
 
 
@@ -1151,51 +1171,39 @@ class CombiusEngine:
         return max(5, min(300, base))
     
     def _pick_channel(self) -> str:
-        """Pick a channel with anti-pattern protection."""
-        # Avoid using same channel repeatedly
-        if self.consecutive_same_channel >= CONFIG["MAX_CONSECUTIVE_SAME_CHANNEL"]:
+        """Pick a channel with less aggressive switching to reduce confusion."""
+        # Keep using the same channel most of the time, and only switch occasionally.
+        if self.last_channel_used is None:
+            ch = random.choice(self.channels)
+            self.last_channel_used = ch
+            self.consecutive_same_channel = 1
+            return ch
+
+        if CONFIG["ANTI_PATTERN_ROTATION"] and random.random() < 0.1:
             others = [c for c in self.channels if c != self.last_channel_used]
             if others:
                 ch = random.choice(others)
-            else:
-                ch = random.choice(self.channels)
-            self.consecutive_same_channel = 0
-        else:
-            ch = random.choice(self.channels)
-        
-        # Rotate channels naturally
-        if self.last_channel_used and CONFIG["ANTI_PATTERN_ROTATION"]:
-            # 30% chance to switch channel even if not forced
-            if random.random() < 0.3:
-                others = [c for c in self.channels if c != self.last_channel_used]
-                if others:
-                    ch = random.choice(others)
-                    self.consecutive_same_channel = 0
-        
-        if ch == self.last_channel_used:
-            self.consecutive_same_channel += 1
-        else:
-            self.consecutive_same_channel = 1
-        
-        self.last_channel_used = ch
+                self.last_channel_used = ch
+                self.consecutive_same_channel = 1
+                return ch
+
+        # If we are forcing a switch due to repeated usage, do it more conservatively.
+        if self.consecutive_same_channel >= max(2, CONFIG["MAX_CONSECUTIVE_SAME_CHANNEL"]):
+            others = [c for c in self.channels if c != self.last_channel_used]
+            if others:
+                ch = random.choice(others)
+                self.last_channel_used = ch
+                self.consecutive_same_channel = 1
+                return ch
+
+        ch = self.last_channel_used
+        self.consecutive_same_channel += 1
         return ch
     
     def _get_owo_command(self) -> str:
-        """Generate a human-like OWO command with variety."""
-        # Weighted random selection
-        pool_choice = random.choices(
-            list(CMD_POOL.keys()),
-            weights=[0.6, 0.2, 0.1, 0.1],
-            k=1
-        )[0]
-        
-        cmd = random.choice(CMD_POOL[pool_choice])
-        
-        # Occasionally add variation
-        if random.random() < 0.15:
-            cmd += f" {random.choice(['pls', 'now', 'go', '!', '.'])}"
-        
-        return cmd
+        """Generate a command from the restricted pool: gambling, hunt, or owo b."""
+        pool = CMD_POOL["gambling"] + CMD_POOL["hunt"] + CMD_POOL["b"]
+        return random.choice(pool)
 
     def _gmt7_now(self) -> datetime:
         return datetime.utcnow() + timedelta(hours=7)
@@ -1224,7 +1232,9 @@ class CombiusEngine:
             self.last_run_run_date = date_today
 
     def _command_delay(self, cmd: str) -> float:
-        """Return the delay after a command, applying optional custom settings for owo b."""
+        """Return the delay after a command, using a configured fixed delay by default."""
+        if CONFIG['COMMAND_DELAY_SECONDS'] > 0:
+            return max(5, min(300, float(CONFIG['COMMAND_DELAY_SECONDS'])))
         if cmd.startswith('owo b') or cmd == 'owo b':
             min_delay = CONFIG['OWO_B_MIN_DELAY'] or CONFIG['MIN_DELAY']
             max_delay = CONFIG['OWO_B_MAX_DELAY'] or CONFIG['MAX_DELAY']
@@ -1590,11 +1600,20 @@ BANNER = """
 
 
 def signal_handler(sig, frame):
-    """Handle Ctrl+C gracefully."""
+    """Handle Ctrl+C gracefully and check balances before stopping."""
     print()
     print(ui.warning("\n  ⛔ Received interrupt signal. Shutting down all engines..."))
     for bot in running_bots:
         bot.stop()
+
+    # Quick balance check for each bot before exit.
+    for bot in running_bots:
+        try:
+            bot.api.send_message(bot.last_channel_used or bot.channels[0], "owo balance")
+            print(ui.dim(f"  [{bot.username}] 🔎 Sent balance check before shutdown"))
+        except Exception as e:
+            print(ui.warning(f"  [{bot.username}] ⚠ Balance check failed: {e}"))
+
     print(ui.success("\n  ✅ All engines stopped. Goodbye.\n"))
     sys.exit(0)
 
