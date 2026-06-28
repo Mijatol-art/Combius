@@ -25,8 +25,8 @@ class BettingTrackerTests(unittest.TestCase):
         self.assertEqual(tracker.state['cf']['current_bet'], 20)
         self.assertEqual(tracker.net_profit_loss, -10)
 
-    def test_blackjack_tie_keeps_bet_the_same(self):
-        tracker = BettingTracker(base_bets={'cf': 10, 'bj': 10, 'slots': 10})
+    def test_blackjack_messages_are_ignored(self):
+        tracker = BettingTracker(base_bets={'cf': 10})
         msg = {
             'author': {'id': '408785106942115850'},
             'content': 'Blackjack result: Tie/Push',
@@ -34,25 +34,23 @@ class BettingTrackerTests(unittest.TestCase):
 
         result = tracker.handle_message(msg)
 
-        self.assertEqual(result['game'], 'bj')
-        self.assertEqual(result['outcome'], 'tie')
-        self.assertEqual(tracker.state['bj']['current_bet'], 10)
+        self.assertIsNone(result)
+        self.assertEqual(tracker.state['cf']['current_bet'], 10)
         self.assertEqual(tracker.net_profit_loss, 0)
 
-    def test_slots_win_resets_bet_to_base(self):
-        tracker = BettingTracker(base_bets={'cf': 10, 'bj': 10, 'slots': 10})
-        tracker.state['slots']['current_bet'] = 20
+    def test_slots_messages_are_ignored(self):
+        tracker = BettingTracker(base_bets={'cf': 10})
+        tracker.state['cf']['current_bet'] = 20
         msg = {
             'author': {'id': '408785106942115850'},
-            'content': 'and won <:cowoncy:416043450337853441>',
+            'content': 'Slots x2.5 reward! You won 20 cowoncy.',
         }
 
         result = tracker.handle_message(msg)
 
-        self.assertEqual(result['game'], 'slots')
-        self.assertEqual(result['outcome'], 'win')
-        self.assertEqual(tracker.state['slots']['current_bet'], 10)
-        self.assertEqual(tracker.net_profit_loss, 20)
+        self.assertIsNone(result)
+        self.assertEqual(tracker.state['cf']['current_bet'], 20)
+        self.assertEqual(tracker.net_profit_loss, 0)
 
     def test_stop_loss_resets_to_base_bet(self):
         tracker = BettingTracker(base_bets={'cf': 10, 'bj': 10, 'slots': 10}, stop_loss_limit=20000)

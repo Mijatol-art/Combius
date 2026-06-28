@@ -898,22 +898,21 @@ class CaptchaHandler:
 # ============================================================
 
 class BettingTracker:
-    """Tracks OWO gambling outcomes and applies a double-on-loss strategy per game mode."""
+    """Tracks OWO coinflip outcomes and applies a capped progression strategy."""
 
     OFFICIAL_OWO_BOT_ID = "408785106942115850"
 
     def __init__(self, base_bets: Optional[Dict[str, int]] = None, stop_loss_limit: int = 20000,
                  target_user_id: Optional[str] = None, analytics_path: Optional[str] = None,
                  notify_chat: Optional[Callable[[str], None]] = None, betting_mode: str = 'martingale'):
-        self.base_bets = dict(base_bets or {'cf': 10, 'bj': 10, 'slots': 10})
+        self.base_bets = dict(base_bets or {'cf': 10})
         self.stop_loss_limit = stop_loss_limit
         self.target_user_id = target_user_id or ''
         self.betting_mode = betting_mode.lower()
         self.analytics_path = analytics_path or str(Path(__file__).with_name('betting_analytics.json'))
         self.notify_chat = notify_chat
         self.state = {
-            game: {'base_bet': int(self.base_bets.get(game, 10)), 'current_bet': int(self.base_bets.get(game, 10))}
-            for game in ('cf', 'bj', 'slots')
+            'cf': {'base_bet': int(self.base_bets.get('cf', 10)), 'current_bet': int(self.base_bets.get('cf', 10))}
         }
         self.net_profit_loss = 0
         self.results = []
@@ -955,35 +954,19 @@ class BettingTracker:
     def _determine_outcome(self, text: str, game: str) -> Optional[str]:
         lowered = text.lower()
         if game == 'cf':
-            if re.search(r'\byou lost\b|\blost\b', lowered):
+            if re.search(r'\byou lost\b|\blost\b|\bit all\b|\blose\b', lowered):
                 return 'loss'
             if re.search(r'\band won\b|\byou won\b|\bwon\b', lowered):
-                return 'win'
-            return None
-        if game == 'bj':
-            if re.search(r'\b(tie|push)\b', lowered):
-                return 'tie'
-            if re.search(r'\b(bust|lost|lose|lose[d]?)\b', lowered):
-                return 'loss'
-            if re.search(r'\bwon\b', lowered):
-                return 'win'
-            return None
-        if game == 'slots':
-            if re.search(r'\bwon nothing\b', lowered):
-                return 'loss'
-            if re.search(r'\bwon\b|\bx\d+(?:\.\d+)?\b', lowered):
                 return 'win'
             return None
         return None
 
     def _game_mode_from_text(self, text: str) -> Optional[str]:
         lowered = text.lower()
-        if re.search(r'\bcoinflip\b|\bflip\b', lowered):
-            return 'cf'
-        if re.search(r'\bblackjack\b|\bjack\b', lowered):
-            return 'bj'
         if re.search(r'\bslots\b', lowered):
-            return 'slots'
+            return None
+        if re.search(r'\bcoinflip\b|\bflip\b|\byou lost\b|\byou won\b|\blost\b|\bwon\b|\bit all\b', lowered):
+            return 'cf'
         return None
 
     def _notify_stop_loss(self, game: str) -> None:
@@ -1048,7 +1031,7 @@ class BettingTracker:
         self.last_summary = {'net_profit_loss': self.net_profit_loss, 'state': self.state}
         print(ui.secondary("  📊 OWO Betting Summary"))
         print(ui.dim(f"    Net: {self.net_profit_loss} cowoncy"))
-        for game in ('cf', 'bj', 'slots'):
+        for game in ('cf',):
             state = self.state[game]
             print(ui.dim(f"    {game}: base={state['base_bet']} current={state['current_bet']}"))
         self._persist_analytics()
