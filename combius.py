@@ -1605,6 +1605,12 @@ running_bots = []
 def main():
     """Main entry point."""
     print(BANNER)
+    # Auto-start support: env var START_ENGINES or CLI flag --yes / -y
+    auto_start = False
+    if any(a in ("--yes", "-y") for a in sys.argv[1:]):
+        auto_start = True
+    if os.environ.get('START_ENGINES', '').lower() in ('1', 'true', 'yes', 'y'):
+        auto_start = True
     
     # System info
     system = platform.system()
@@ -1656,20 +1662,24 @@ def main():
     print(ui.header("  DEPLOYMENT"))
     print()
     
-    try:
-        confirm = input(ui.primary("  Start all engines? (y/N): ")).strip().lower()
-    except EOFError:
-        print()
-        print(ui.warning("  No input available — aborting."))
-        return
-    except KeyboardInterrupt:
-        print()
-        print(ui.warning("  Aborted."))
-        return
+    if auto_start:
+        print(ui.dim("  Auto-start enabled — starting engines without prompt."))
+        confirm = 'y'
+    else:
+        try:
+            confirm = input(ui.primary("  Start all engines? (y/N): ")).strip().lower()
+        except EOFError:
+            print()
+            print(ui.warning("  No input available — aborting."))
+            return
+        except KeyboardInterrupt:
+            print()
+            print(ui.warning("  Aborted."))
+            return
 
-    if confirm != 'y':
-        print(ui.warning("  Aborted."))
-        return
+        if confirm != 'y':
+            print(ui.warning("  Aborted."))
+            return
     
     # Register signal handler
     signal.signal(signal.SIGINT, signal_handler)
