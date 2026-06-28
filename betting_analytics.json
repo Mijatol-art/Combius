@@ -1,8 +1,12 @@
 {
-  "generated_at": "2026-06-28T10:22:20.756899Z",
+  "generated_at": "2026-06-28T10:31:12.693084Z",
   "net_profit_loss": 0,
   "state": {
     "cf": {
+      "base_bet": 10,
+      "current_bet": 10
+    },
+    "slots": {
       "base_bet": 10,
       "current_bet": 10
     }

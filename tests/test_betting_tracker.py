@@ -38,9 +38,9 @@ class BettingTrackerTests(unittest.TestCase):
         self.assertEqual(tracker.state['cf']['current_bet'], 10)
         self.assertEqual(tracker.net_profit_loss, 0)
 
-    def test_slots_messages_are_ignored(self):
-        tracker = BettingTracker(base_bets={'cf': 10})
-        tracker.state['cf']['current_bet'] = 20
+    def test_slots_win_is_detected_and_updates_state(self):
+        tracker = BettingTracker(base_bets={'cf': 10, 'slots': 10})
+        tracker.state['slots']['current_bet'] = 20
         msg = {
             'author': {'id': '408785106942115850'},
             'content': 'Slots x2.5 reward! You won 20 cowoncy.',
@@ -48,8 +48,53 @@ class BettingTrackerTests(unittest.TestCase):
 
         result = tracker.handle_message(msg)
 
+        self.assertEqual(result['game'], 'slots')
+        self.assertEqual(result['outcome'], 'win')
+        self.assertEqual(tracker.state['slots']['current_bet'], 10)
+        self.assertEqual(tracker.net_profit_loss, 20)
+
+    def test_slots_loss_is_detected_and_doubles_bet(self):
+        tracker = BettingTracker(base_bets={'cf': 10, 'slots': 10})
+        tracker.state['slots']['current_bet'] = 10
+        msg = {
+            'author': {'id': '408785106942115850'},
+            'content': 'You lost 10 cowoncy in slots.',
+        }
+
+        result = tracker.handle_message(msg)
+
+        self.assertEqual(result['game'], 'slots')
+        self.assertEqual(result['outcome'], 'loss')
+        self.assertEqual(tracker.state['slots']['current_bet'], 20)
+        self.assertEqual(tracker.net_profit_loss, -10)
+
+    def test_slots_won_nothing_is_not_treated_as_a_win(self):
+        tracker = BettingTracker(base_bets={'cf': 10, 'slots': 10})
+        tracker.state['slots']['current_bet'] = 20
+        msg = {
+            'author': {'id': '408785106942115850'},
+            'content': 'Slots result: You won nothing.',
+        }
+
+        result = tracker.handle_message(msg)
+
         self.assertIsNone(result)
-        self.assertEqual(tracker.state['cf']['current_bet'], 20)
+        self.assertEqual(tracker.state['slots']['current_bet'], 20)
+        self.assertEqual(tracker.net_profit_loss, 0)
+
+    def test_slots_emoji_win_is_detected(self):
+        tracker = BettingTracker(base_bets={'cf': 10, 'slots': 10})
+        tracker.state['slots']['current_bet'] = 20
+        msg = {
+            'author': {'id': '408785106942115850'},
+            'content': 'Slots x2.5 reward! You won <:cowoncy:>.',
+        }
+
+        result = tracker.handle_message(msg)
+
+        self.assertEqual(result['game'], 'slots')
+        self.assertEqual(result['outcome'], 'win')
+        self.assertEqual(tracker.state['slots']['current_bet'], 10)
         self.assertEqual(tracker.net_profit_loss, 0)
 
     def test_stop_loss_resets_to_base_bet(self):

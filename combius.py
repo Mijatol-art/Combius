@@ -238,7 +238,7 @@ GEM_TIER_LEVEL = {**{i: i-50 for i in range(51, 58)},   # 51->1, 57->7
 
 # OWO Command pool for the requested behavior: gambling + oh + ob + opiku + orun only.
 CMD_POOL = {
-    "gambling": ["owo slots 10", "owo coinflip head 10", "owo coinflip tail 10"],
+    "gambling": ["owo coinflip head 10", "owo coinflip tail 10"],
     "oh": ["oh"],
     "ob": ["ob"],
     # 'opiku' and 'orun' removed by user request
@@ -905,14 +905,15 @@ class BettingTracker:
     def __init__(self, base_bets: Optional[Dict[str, int]] = None, stop_loss_limit: int = 20000,
                  target_user_id: Optional[str] = None, analytics_path: Optional[str] = None,
                  notify_chat: Optional[Callable[[str], None]] = None, betting_mode: str = 'martingale'):
-        self.base_bets = dict(base_bets or {'cf': 10})
+        self.base_bets = dict(base_bets or {'cf': 10, 'slots': 10})
         self.stop_loss_limit = stop_loss_limit
         self.target_user_id = target_user_id or ''
         self.betting_mode = betting_mode.lower()
         self.analytics_path = analytics_path or str(Path(__file__).with_name('betting_analytics.json'))
         self.notify_chat = notify_chat
         self.state = {
-            'cf': {'base_bet': int(self.base_bets.get('cf', 10)), 'current_bet': int(self.base_bets.get('cf', 10))}
+            game: {'base_bet': int(self.base_bets.get(game, 10)), 'current_bet': int(self.base_bets.get(game, 10))}
+            for game in ('cf', 'slots')
         }
         self.net_profit_loss = 0
         self.results = []
@@ -940,10 +941,14 @@ class BettingTracker:
         return ' '.join(parts)
 
     def _parse_amount(self, text: str) -> Optional[int]:
+        lowered = text.lower()
+        if re.search(r'\byou won nothing\b|\bwon nothing\b|\byou won no\b', lowered):
+            return None
+
         patterns = [
-            r'(?:won|lost|earned|received|gained|spent|bet|reward)\s+(\d+)',
-            r'you\s+(?:won|lost)\s+(\d+)',
-            r'(\d+)(?:\s*cowoncy)?',
+            r'(?:won|lost|earned|received|gained|spent|bet|reward)\s+(?<![a-zA-Z0-9_.])(\d+)(?![\d.])',
+            r'you\s+(?:won|lost)\s+(?<![a-zA-Z0-9_.])(\d+)(?![\d.])',
+            r'(?<![a-zA-Z0-9_.])(\d+)(?:\s*cowoncy)?(?![\d.])',
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.I)
@@ -959,12 +964,24 @@ class BettingTracker:
             if re.search(r'\band won\b|\byou won\b|\bwon\b', lowered):
                 return 'win'
             return None
+        if game == 'slots':
+            if re.search(r'\blost\b|\blose\b|\blose[d]?\b', lowered):
+                return 'loss'
+            if re.search(r'\byou won\b', lowered):
+                if re.search(r'\byou won nothing\b|\byou won no\b|\bwon nothing\b', lowered):
+                    return None
+                return 'win'
+            if re.search(r'\bwon\b', lowered) and re.search(r'\b(?:\d+|<:cowoncy:>|cowoncy)\b', lowered):
+                return 'win'
+            if re.search(r'\bx\d+(?:\.\d+)?\b', lowered):
+                return 'win'
+            return None
         return None
 
     def _game_mode_from_text(self, text: str) -> Optional[str]:
         lowered = text.lower()
         if re.search(r'\bslots\b', lowered):
-            return None
+            return 'slots'
         if re.search(r'\bcoinflip\b|\bflip\b|\byou lost\b|\byou won\b|\blost\b|\bwon\b|\bit all\b', lowered):
             return 'cf'
         return None
@@ -1028,7 +1045,7 @@ class BettingTracker:
         self.last_summary = {'net_profit_loss': self.net_profit_loss, 'state': self.state}
         print(ui.secondary("  📊 OWO Betting Summary"))
         print(ui.dim(f"    Net: {self.net_profit_loss} cowoncy"))
-        for game in ('cf',):
+        for game in ('cf', 'slots'):
             state = self.state[game]
             print(ui.dim(f"    {game}: base={state['base_bet']} current={state['current_bet']}"))
         self._persist_analytics()
@@ -1517,7 +1534,7 @@ class CombiusEngine:
         if not available:
             available = [c for c in pool if c in (oh_list + ob_list + gambling)]
 
-        cmd = random.choice(available) if available else "owo slots 10"
+        cmd = random.choice(available) if available else "owo coinflip tail 10"
 
         # Update memory and last sent
         self.command_last_cycle[cmd] = self.cycle
