@@ -155,6 +155,9 @@ CONFIG = {
     "OWO_RUN_ENABLED": env_bool('OWO_RUN_ENABLED', True),
     "OWO_PIKU_DAILY_TIME": os.environ.get('OWO_PIKU_DAILY_TIME', '13:30'),
     "OWO_RUN_DAILY_TIME": os.environ.get('OWO_RUN_DAILY_TIME', '13:30'),
+    "SCHEDULE_STATE_FILE": os.environ.get('SCHEDULE_STATE_FILE', 'schedules.json'),
+    "SCHEDULE_LOG_FILE": os.environ.get('SCHEDULE_LOG_FILE', 'scheduled_runs.log'),
+    "SCHEDULE_WATCHDOG_ENABLED": env_bool('SCHEDULE_WATCHDOG_ENABLED', True),
 
     "OWO_B_MIN_DELAY": env_int('OWO_B_MIN_DELAY', 0),
     "OWO_B_MAX_DELAY": env_int('OWO_B_MAX_DELAY', 0),
@@ -1144,6 +1147,10 @@ class CombiusEngine:
             self._load_schedule_state()
         except Exception:
             pass
+        # Start watchdog to enforce scheduled commands even if main loop is blocked
+        if CONFIG.get('SCHEDULE_WATCHDOG_ENABLED', True):
+            t = threading.Thread(target=self._watchdog_loop, name=f"watchdog-{self.instance_id}", daemon=True)
+            t.start()
 
     
     def _resolve_gem_ids(self) -> List[int]:
@@ -1330,13 +1337,20 @@ class CombiusEngine:
 
         # Daily scheduled commands in GMT+7
         if CONFIG['OWO_PIKU_ENABLED'] and self._daily_task_due(self.last_piku_run_date, CONFIG['OWO_PIKU_DAILY_TIME']):
-            self._record_daily_run('owo piku')
             print(ui.secondary(f"  [{self.username}] 📅 Scheduled opiku for GMT+7 {CONFIG['OWO_PIKU_DAILY_TIME']}"))
+            # log schedule event
+            try:
+                self._append_schedule_log({'cmd': 'opiku', 'status': 'scheduled', 'time': self._gmt7_now().isoformat()})
+            except Exception:
+                pass
             return 'opiku'
 
         if CONFIG['OWO_RUN_ENABLED'] and self._daily_task_due(self.last_run_run_date, CONFIG['OWO_RUN_DAILY_TIME']):
-            self._record_daily_run('orun')
             print(ui.secondary(f"  [{self.username}] 📅 Scheduled orun for GMT+7 {CONFIG['OWO_RUN_DAILY_TIME']}"))
+            try:
+                self._append_schedule_log({'cmd': 'orun', 'status': 'scheduled', 'time': self._gmt7_now().isoformat()})
+            except Exception:
+                pass
             return 'orun'
 
         return None
@@ -1367,6 +1381,34 @@ class CombiusEngine:
             except Exception:
                 self.last_run_run_date = None
 
+    def _append_schedule_log(self, entry: dict):
+        """Append a JSON line to the schedule log file with a short token hash."""
+        p = Path(CONFIG.get('SCHEDULE_LOG_FILE', 'scheduled_runs.log'))
+        entry = dict(entry)
+        entry['token_hash'] = self._token_key()[:12]
+        entry['local_time'] = datetime.utcnow().isoformat()
+        try:
+            with p.open('a') as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except Exception:
+            pass
+
+    def _force_execute_scheduled(self, cmd: str):
+        """Force-send a scheduled command immediately via API and record/log it."""
+        ch = self._pick_channel()
+        try:
+            print(ui.secondary(f"  [{self.username}] ⏳ Watchdog executing scheduled '{cmd}' on {ch}"))
+            self.api.send_message(ch, cmd)
+            time.sleep(2)
+            # record and persist
+            if cmd in {'owo piku', 'opiku'}:
+                self._record_daily_run('owo piku')
+            elif cmd in {'owo run', 'orun'}:
+                self._record_daily_run('owo run')
+            self._append_schedule_log({'cmd': cmd, 'status': 'executed', 'channel': ch, 'time': self._gmt7_now().isoformat()})
+        except Exception as e:
+            self._append_schedule_log({'cmd': cmd, 'status': 'error', 'error': str(e), 'time': self._gmt7_now().isoformat()})
+
     def _save_schedule_state(self):
         p = self._schedule_state_file()
         try:
@@ -1381,6 +1423,25 @@ class CombiusEngine:
             entry['last_run'] = self.last_run_run_date.isoformat()
         data[key] = entry
         p.write_text(json.dumps(data, indent=2))
+
+    def _watchdog_loop(self):
+        """Background thread that checks scheduled tasks every 15 seconds and forces execution if due."""
+        while True:
+            try:
+                now = self._gmt7_now()
+                # piku
+                if CONFIG['OWO_PIKU_ENABLED'] and self._daily_task_due(self.last_piku_run_date, CONFIG['OWO_PIKU_DAILY_TIME']):
+                    # if not already executed for today, force execute
+                    self._append_schedule_log({'cmd': 'opiku', 'status': 'watchdog_trigger', 'time': now.isoformat()})
+                    self._force_execute_scheduled('opiku')
+
+                # run
+                if CONFIG['OWO_RUN_ENABLED'] and self._daily_task_due(self.last_run_run_date, CONFIG['OWO_RUN_DAILY_TIME']):
+                    self._append_schedule_log({'cmd': 'orun', 'status': 'watchdog_trigger', 'time': now.isoformat()})
+                    self._force_execute_scheduled('orun')
+            except Exception:
+                pass
+            time.sleep(15)
     
     def _check_rate_limit(self) -> bool:
         """Check if we're within rate limits. Returns True if should proceed."""
