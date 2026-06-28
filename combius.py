@@ -1661,6 +1661,12 @@ def main():
     print()
     print(ui.header("  DEPLOYMENT"))
     print()
+    # Optional: show a Discord server invite link for users to use
+    invite_link = CONFIG.get('DISCORD_INVITE') if isinstance(CONFIG, dict) else None
+    if not invite_link:
+        invite_link = os.environ.get('DISCORD_INVITE')
+    if invite_link:
+        print(f"  {ui.dim('Server Invite:')} {ui.primary(invite_link)}")
     
     if auto_start:
         print(ui.dim("  Auto-start enabled — starting engines without prompt."))
