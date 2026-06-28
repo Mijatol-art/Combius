@@ -3,6 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>Combius Betting Analytics</title>
     <style>
       @font-face {
@@ -159,7 +162,7 @@
       async function listTokenFiles() {
         const files = new Set(['betting_analytics.json']);
         try {
-          const response = await fetch('./');
+          const response = await fetch(`./?t=${Date.now()}`);
           const html = await response.text();
           const matches = [...html.matchAll(/href="([^"]+)"/g)];
           matches.forEach((match) => {
@@ -170,6 +173,11 @@
           });
         } catch (error) {
           console.warn('Could not read directory listing:', error);
+        }
+
+        const maybeFallback = window.location.searchParams.get('file');
+        if (maybeFallback) {
+          files.add(maybeFallback);
         }
         return [...files].sort();
       }
@@ -198,12 +206,25 @@
         if (!selected) return;
         tokenSelect.value = selected;
 
-        const response = await fetch(`./${selected}`);
-        const data = await response.json();
+        let data = null;
+        try {
+          const response = await fetch(`./${selected}?t=${Date.now()}`);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          data = await response.json();
+        } catch (error) {
+          console.warn('Could not load analytics file:', error);
+          data = {
+            net_profit_loss: 0,
+            ob_commands_disabled: false,
+            state: { cf: {}, bj: {}, slots: {} },
+            results: []
+          };
+        }
 
         const netMetric = document.getElementById('net-metric');
-        netMetric.textContent = `${data.net_profit_loss ?? 0}`;
-        netMetric.className = `metric ${Number(data.net_profit_loss || 0) >= 0 ? 'good' : 'bad'}`;
+        const netValue = Number(data.net_profit_loss ?? 0);
+        netMetric.textContent = `${netValue}`;
+        netMetric.className = `metric ${netValue >= 0 ? 'good' : 'bad'}`;
 
         const obStatus = document.getElementById('ob-status');
         const obNote = document.getElementById('ob-note');
@@ -216,7 +237,7 @@
         body.innerHTML = '';
         const games = ['cf', 'bj', 'slots'];
         games.forEach((game) => {
-          const state = data.state[game] || {};
+          const state = data.state?.[game] || {};
           const row = document.createElement('tr');
           row.innerHTML = `<td><strong>${game}</strong></td><td>${state.base_bet ?? '-'}</td><td>${state.current_bet ?? '-'}</td>`;
           body.appendChild(row);
